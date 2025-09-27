@@ -20,10 +20,18 @@
 
 #include <format>
 #include <numeric>
+#include <iostream>
+
 
 #include <QLocale>
 
+#if __has_include(<magic_enum.hpp>)
 #include <magic_enum.hpp>
+#elif __has_include(<magic_enum/magic_enum.hpp>)
+#include <magic_enum/magic_enum.hpp>
+#else
+#error "magic_enum header not found"
+#endif
 
 #include <Config.h>
 #include "Error.h"
@@ -77,8 +85,9 @@ const LaunchOpts &LaunchOptsManager::Parse(int argc, char *argv[])
 
         return _opts;
     }
-    catch (cxxopts::OptionException &exception) {
-        FatalError(std::format("Parse options failed.\n\n{}", exception.what()), false);
+    catch (const std::exception &e) {
+        std::string msg = std::string{"Parse options failed.\n\n"} + e.what();
+        FatalError(msg, false);
         std::exit(1);
     }
 }

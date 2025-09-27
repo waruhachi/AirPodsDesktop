@@ -21,7 +21,13 @@
 #include <mutex>
 #include <QDir>
 #include <boost/pfr.hpp>
+#if __has_include(<magic_enum.hpp>)
 #include <magic_enum.hpp>
+#elif __has_include(<magic_enum/magic_enum.hpp>)
+#include <magic_enum/magic_enum.hpp>
+#else
+#error "magic_enum header not found"
+#endif
 
 #include <Config.h>
 #include "../Logger.h"

@@ -14,5 +14,8 @@ CTestTestfile.cmake
 out/
 CMakeSettings.json
 
+# vcpkg
+vcpkg_installed/
+
 # Build
 Build/
