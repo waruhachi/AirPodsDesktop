@@ -28,7 +28,7 @@ env:
   PLATFORM_NAME: Win32
   BUILD_TYPE: RelWithDebInfo
   UPLOAD_ARTIFACT: true
-  CACHE_DEPS: false
+  CACHE_DEPS: true
   FIXED_CMAKE_VERSION: 3.21.4
 
 jobs:
