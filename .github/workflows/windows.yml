@@ -17,6 +17,13 @@ on:
 
   workflow_dispatch:
 
+permissions:
+    contents: read
+    
+concurrency:
+    group: windows-build-${{ github.ref }}
+    cancel-in-progress: true
+
 env:
   PLATFORM_NAME: Win32
   BUILD_TYPE: RelWithDebInfo
@@ -70,6 +77,9 @@ jobs:
         run: |
           choco install cmake.install --version ${{ env.FIXED_CMAKE_VERSION }} --installargs 'ADD_CMAKE_TO_PATH=System' --force
           cmake --version
+
+      - name: Install NSIS
+        run: choco install nsis
 
       - name: Clone and bootstrap vcpkg
         working-directory: Build
