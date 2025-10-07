@@ -1,4 +1,5 @@
-name: Cross-Platform Builds
+name: Windows Builds
+
 on:
   push:
     paths-ignore:
@@ -6,59 +7,53 @@ on:
       - 'LICENSE'
       - 'Assets/**'
       - 'Docs/**'
+
   pull_request:
     paths-ignore:
       - '**.md'
       - 'LICENSE'
       - 'Assets/**'
       - 'Docs/**'
+
   workflow_dispatch:
+
 permissions:
-  contents: read
+    contents: read
+    
 concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: true
+    group: windows-build-${{ github.ref }}
+    cancel-in-progress: true
+
 env:
+  PLATFORM_NAME: Win32
   BUILD_TYPE: RelWithDebInfo
   UPLOAD_ARTIFACT: true
   CACHE_DEPS: false
   FIXED_CMAKE_VERSION: 3.21.4
-  SKIP_VCPKG_ON_LINUX: false
+
 jobs:
   Build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            platform_name: Win32
-            generator: "Visual Studio 17 2022"
-            qt_subdir: "msvc2019"
-            enable_installer: true
-            cmake_multi_config: true
-          - os: ubuntu-latest
-            platform_name: ""
-            generator: "Ninja"
-            qt_subdir: "gcc_64"
-            enable_installer: false
-            cmake_multi_config: false
+    runs-on: windows-latest
+
     defaults:
       run:
-        shell: bash
+        shell: cmd
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           submodules: recursive
+
       - name: Prepare build directory
-        run: mkdir -p Build
+        run: mkdir Build
+
       - name: Generate dependencies cache key
         if: env.CACHE_DEPS == 'true'
         run: |
           curl -o Build/DepsRef.json https://api.github.com/repos/SpriteOvO/AirPodsDesktop-Deps/git/refs/heads/main
-          cat Build/DepsRef.json
+          type DepsRef.json
+
       - name: Dependencies cache
         id: cache-deps
         if: env.CACHE_DEPS == 'true'
@@ -66,188 +61,71 @@ jobs:
         with:
           path: Build/AirPodsDesktop-Deps
           key: ${{ hashFiles('Build/DepsRef.json') }}
+
       - name: Clone dependencies
         if: env.CACHE_DEPS != 'true' || steps.cache-deps.outputs.cache-hit != 'true'
         working-directory: Build
         run: |
           git clone --recursive https://github.com/SpriteOvO/AirPodsDesktop-Deps.git
-          ls -1
-      - name: Use fixed CMake version (Windows)
-        if: runner.os == 'Windows' && env.FIXED_CMAKE_VERSION != ''
-        shell: cmd
-        run: |
-          choco install cmake.install --version %FIXED_CMAKE_VERSION% --installargs "ADD_CMAKE_TO_PATH=System" --force
-          cmake --version
-      - name: Use fixed CMake version (Linux)
-        if: runner.os == 'Linux' && env.FIXED_CMAKE_VERSION != ''
+          dir AirPodsDesktop-Deps
+
+      - name: Print CMake version
         run: cmake --version
-      - name: Install Windows tooling
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: choco install nsis -y
-      - name: Install Linux packages
-        if: runner.os == 'Linux'
+
+      - name: Use a fixed version of CMake
+        if: env.FIXED_CMAKE_VERSION != ''
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build build-essential git curl unzip tar jq \
-            qtbase5-dev libqt5svg5-dev qtmultimedia5-dev qttools5-dev \
-            libgl1-mesa-dev libxkbcommon-x11-0 libpulse-dev
-          ninja --version
-      - name: Clone and bootstrap vcpkg (Windows)
-        if: runner.os == 'Windows'
+          choco install cmake.install --version ${{ env.FIXED_CMAKE_VERSION }} --installargs 'ADD_CMAKE_TO_PATH=System' --force
+          cmake --version
+
+      - name: Install NSIS
+        run: choco install nsis
+
+      - name: Clone and bootstrap vcpkg
         working-directory: Build
-        shell: cmd
         run: |
           git clone --recursive https://github.com/microsoft/vcpkg.git
-          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
-      - name: Clone and bootstrap vcpkg (Linux)
-        if: runner.os == 'Linux' && env.SKIP_VCPKG_ON_LINUX != 'true'
+          ./vcpkg/bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Generate project and build
         working-directory: Build
         run: |
-          git clone https://github.com/microsoft/vcpkg.git
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-        env:
-          VCPKG_FORCE_SYSTEM_BINARIES: 1
-      - name: Patch vcpkg manifest for Linux
-        if: runner.os == 'Linux' && env.SKIP_VCPKG_ON_LINUX != 'true'
+          mkdir ${{ env.BUILD_TYPE }} && cd ${{ env.BUILD_TYPE }}
+
+          cmake -G "Visual Studio 17 2022" ^
+                -A ${{ env.PLATFORM_NAME }} ^
+                -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} ^
+                -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake ^
+                -DCMAKE_PREFIX_PATH=${{ github.workspace }}/Build/AirPodsDesktop-Deps/Qt/5.15.2/msvc2019 ^
+                -DAPD_GENERATE_INSTALLER=ON ^
+                -DAPD_BUILD_GIT_HASH=${{ github.sha }} ^
+                ../../
+
+          cmake --build . ^
+                --config ${{ env.BUILD_TYPE }}
+
+          dir /s Binary
+          dir /s Installer
+
+      - name: Prepare artifacts
+        if: env.UPLOAD_ARTIFACT == 'true'
+        working-directory: Build\${{ env.BUILD_TYPE }}\Installer
         run: |
-          if [ -f vcpkg.json ]; then
-            cp vcpkg.json vcpkg.json.orig
-            if command -v jq >/dev/null 2>&1; then
-              if jq '
-                .dependencies |=
-                  ( map(
-                      if (type=="string") then
-                        ( if test("^boost-stacktrace(\\[.*\\])?$") then "boost-stacktrace" else . end )
-                      elif (type=="object") then
-                        ( if (.name?=="boost-stacktrace") then
-                            ( if (.features? | type=="array") then .features |= map(select(. != "windbg")) else . end )
-                          else . end )
-                      else .
-                      end
-                  ))
-              ' vcpkg.json.orig > vcpkg.json.tmp 2>/dev/null; then
-                mv vcpkg.json.tmp vcpkg.json
-              else
-                cp vcpkg.json.orig vcpkg.json
-              fi
-            fi
-            if grep -q 'boost-stacktrace\[windbg\]' vcpkg.json; then
-              sed -i.bak 's/boost-stacktrace\[windbg\]/boost-stacktrace/g' vcpkg.json
-            fi
-            sed -n '1,160p' vcpkg.json
-          fi
-      - name: Show vcpkg baseline + environment (Linux)
-        if: runner.os == 'Linux' && env.SKIP_VCPKG_ON_LINUX != 'true'
-        run: |
-          git -C Build/vcpkg rev-parse HEAD || true
-          [ -f vcpkg.json ] && sed -n '1,120p' vcpkg.json
-      - name: Configure project
-        working-directory: Build
-        run: |
-          set -e
-          mkdir -p "$BUILD_TYPE"
-          cd "$BUILD_TYPE"
-          QT_PREFIX_CANDIDATE="${GITHUB_WORKSPACE}/Build/AirPodsDesktop-Deps/Qt/5.15.2/${{ matrix.qt_subdir }}"
-          if [ "${{ runner.os }}" = "Linux" ] && [ ! -d "$QT_PREFIX_CANDIDATE" ]; then
-            QT_PREFIX_PATH=""
-          else
-            QT_PREFIX_PATH="$QT_PREFIX_CANDIDATE"
-          fi
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            INSTALLER_FLAG="-DAPD_GENERATE_INSTALLER=ON"
-            EXTRA_FLAGS=""
-          else
-            INSTALLER_FLAG="-DAPD_GENERATE_INSTALLER=OFF"
-            EXTRA_FLAGS="-DCMAKE_BUILD_TYPE=${BUILD_TYPE}"
-          fi
-          TOOLCHAIN_FLAG=""
-          if [ "${{ runner.os }}" = "Linux" ] && [ "$SKIP_VCPKG_ON_LINUX" = "true" ]; then
-            :
-          else
-            if [ -d "${GITHUB_WORKSPACE}/Build/vcpkg" ] && [ -f "${GITHUB_WORKSPACE}/Build/vcpkg/scripts/buildsystems/vcpkg.cmake" ]; then
-              TOOLCHAIN_FLAG="-DCMAKE_TOOLCHAIN_FILE=${GITHUB_WORKSPACE}/Build/vcpkg/scripts/buildsystems/vcpkg.cmake"
-            fi
-          fi
-          ARCH_ARG=""
-          if [ "${{ runner.os }}" = "Windows" ] && [ -n "${{ matrix.platform_name }}" ]; then
-            ARCH_ARG="-A ${{ matrix.platform_name }}"
-          fi
-          if command -v ninja >/dev/null 2>&1; then
-            MAKE_PROG_FLAG="-DCMAKE_MAKE_PROGRAM=$(command -v ninja)"
-          else
-            MAKE_PROG_FLAG=""
-          fi
-          CMAKE_PREFIX_PATH_ARG=""
-          if [ -n "${QT_PREFIX_PATH}" ]; then
-            CMAKE_PREFIX_PATH_ARG="-DCMAKE_PREFIX_PATH=${QT_PREFIX_PATH}"
-          fi
-          cmake -G "${{ matrix.generator }}" \
-            ${ARCH_ARG} \
-            ${EXTRA_FLAGS} \
-            ${TOOLCHAIN_FLAG} \
-            ${MAKE_PROG_FLAG} \
-            ${CMAKE_PREFIX_PATH_ARG} \
-            ${INSTALLER_FLAG} \
-            -DAPD_BUILD_GIT_HASH=${{ github.sha }} \
-            ../../
-      - name: Build project (Windows)
-        if: runner.os == 'Windows'
-        working-directory: Build/${{ env.BUILD_TYPE }}
-        shell: cmd
-        run: cmake --build . --config %BUILD_TYPE%
-      - name: Build project (Linux)
-        if: runner.os == 'Linux'
-        working-directory: Build/${{ env.BUILD_TYPE }}
-        run: cmake --build . -- -j"$(nproc)"
-      - name: List build outputs
-        working-directory: Build/${{ env.BUILD_TYPE }}
-        run: |
-          ls -R ./Binary 2>/dev/null || echo "No Binary dir"
-          ls -R ./Installer 2>/dev/null || echo "No Installer dir"
-      - name: Prepare Windows artifacts
-        if: runner.os == 'Windows' && env.UPLOAD_ARTIFACT == 'true' && matrix.enable_installer
-        working-directory: Build/${{ env.BUILD_TYPE }}/Installer
-        shell: cmd
-        run: |
-          if exist _CPack_Packages\win32\NSIS (
-            cd _CPack_Packages\win32\NSIS
-            for /d %%D in (AirPodsDesktop-*-win32) do (
-              move "%%D" "AirPodsDesktop-${{ github.sha }}-win32"
-            )
-          )
-      - name: Upload artifact - Windows Installer
-        if: runner.os == 'Windows' && env.UPLOAD_ARTIFACT == 'true' && matrix.enable_installer
+          cd _CPack_Packages\win32\NSIS
+          move AirPodsDesktop-*-win32 AirPodsDesktop-${{ github.sha }}-win32
+
+      - name: Upload artifact - Installer
         uses: actions/upload-artifact@v4
+        if: env.UPLOAD_ARTIFACT == 'true'
         with:
           name: AirPodsDesktop-${{ github.sha }}-Installer
-          path: Build/${{ env.BUILD_TYPE }}/Installer/AirPodsDesktop-*-win32.exe
+          path: Build\${{ env.BUILD_TYPE }}\Installer\AirPodsDesktop-*-win32.exe
           retention-days: 90
-      - name: Upload artifact - Windows Portable
-        if: runner.os == 'Windows' && env.UPLOAD_ARTIFACT == 'true' && matrix.enable_installer
+
+      - name: Upload artifact - Portable
         uses: actions/upload-artifact@v4
+        if: env.UPLOAD_ARTIFACT == 'true'
         with:
           name: AirPodsDesktop-${{ github.sha }}-Portable
-          path: Build/${{ env.BUILD_TYPE }}/Installer/_CPack_Packages/win32/NSIS/AirPodsDesktop-${{ github.sha }}-win32/AirPodsDesktop
-          retention-days: 90
-      - name: Prepare Linux artifact
-        if: runner.os == 'Linux' && env.UPLOAD_ARTIFACT == 'true'
-        working-directory: Build/${{ env.BUILD_TYPE }}
-        run: |
-          if [ -d "Binary" ]; then
-            mkdir -p package-root
-            cp -a Binary/* package-root/ || true
-            tar -czf AirPodsDesktop-${{ github.sha }}-linux.tar.gz -C package-root .
-            ls -lh AirPodsDesktop-${{ github.sha }}-linux.tar.gz
-          else
-            echo "No Binary dir"
-            exit 1
-          fi
-      - name: Upload artifact - Linux Portable
-        if: runner.os == 'Linux' && env.UPLOAD_ARTIFACT == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: AirPodsDesktop-${{ github.sha }}-Linux
-          path: Build/${{ env.BUILD_TYPE }}/AirPodsDesktop-${{ github.sha }}-linux.tar.gz
+          path: Build\${{ env.BUILD_TYPE }}\Installer\_CPack_Packages\win32\NSIS\AirPodsDesktop-${{ github.sha }}-win32\AirPodsDesktop
           retention-days: 90
