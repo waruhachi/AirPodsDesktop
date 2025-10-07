@@ -23,6 +23,7 @@ env:
   UPLOAD_ARTIFACT: true
   CACHE_DEPS: false
   FIXED_CMAKE_VERSION: 3.21.4
+  SKIP_VCPKG_ON_LINUX: false
 jobs:
   Build:
     name: Build (${{ matrix.os }})
@@ -79,8 +80,7 @@ jobs:
           cmake --version
       - name: Use fixed CMake version (Linux)
         if: runner.os == 'Linux' && env.FIXED_CMAKE_VERSION != ''
-        run: |
-          cmake --version
+        run: cmake --version
       - name: Install Windows tooling
         if: runner.os == 'Windows'
         shell: cmd
@@ -99,33 +99,48 @@ jobs:
           git clone --recursive https://github.com/microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
       - name: Clone and bootstrap vcpkg (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && env.SKIP_VCPKG_ON_LINUX != 'true'
         working-directory: Build
         run: |
-          git clone https://github.com/microsoft/vcpkg.git
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+            git clone https://github.com/microsoft/vcpkg.git
+            ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
         env:
           VCPKG_FORCE_SYSTEM_BINARIES: 1
       - name: Patch vcpkg manifest for Linux
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && env.SKIP_VCPKG_ON_LINUX != 'true'
         run: |
           if [ -f vcpkg.json ]; then
-            cp vcpkg.json vcpkg.json.bak
-            jq '(.dependencies) |= map(
-              if type=="object" and .name=="boost-stacktrace" and has("features") then
-                .features |= [ .features[] | select(. != "windbg") ]
-              elif type=="string" then
-                sub("boost-stacktrace\\[windbg\\]";"boost-stacktrace")
-              else .
-              end
-            )' vcpkg.json.bak > vcpkg.json
-            grep -n "boost-stacktrace" vcpkg.json || true
+            cp vcpkg.json vcpkg.json.orig
+            if command -v jq >/dev/null 2>&1; then
+              if jq '
+                .dependencies |=
+                  ( map(
+                      if (type=="string") then
+                        ( if test("^boost-stacktrace(\\[.*\\])?$") then "boost-stacktrace" else . end )
+                      elif (type=="object") then
+                        ( if (.name?=="boost-stacktrace") then
+                            ( if (.features? | type=="array") then .features |= map(select(. != "windbg")) else . end )
+                          else . end )
+                      else .
+                      end
+                  ))
+              ' vcpkg.json.orig > vcpkg.json.tmp 2>/dev/null; then
+                mv vcpkg.json.tmp vcpkg.json
+              else
+                cp vcpkg.json.orig vcpkg.json
+              fi
+            fi
+            if grep -q 'boost-stacktrace\[windbg\]' vcpkg.json; then
+              sed -i.bak 's/boost-stacktrace\[windbg\]/boost-stacktrace/g' vcpkg.json
+            fi
+            echo "Final manifest snippet:"
+            sed -n '1,160p' vcpkg.json
           fi
       - name: Show vcpkg baseline + environment (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && env.SKIP_VCPKG_ON_LINUX != 'true'
         run: |
-          git -C Build/vcpkg rev-parse HEAD
-          if [ -f vcpkg.json ]; then sed -n '1,120p' vcpkg.json; fi
+          git -C Build/vcpkg rev-parse HEAD || true
+          [ -f vcpkg.json ] && sed -n '1,120p' vcpkg.json
       - name: Configure project
         working-directory: Build
         run: |
@@ -146,18 +161,22 @@ jobs:
             EXTRA_FLAGS="-DCMAKE_BUILD_TYPE=${BUILD_TYPE}"
           fi
           TOOLCHAIN_FLAG=""
+          if [ "${{ runner.os }}" = "Linux" ] && [ "$SKIP_VCPKG_ON_LINUX" = "true" ]; then
+            :
+          else
             if [ -d "${GITHUB_WORKSPACE}/Build/vcpkg" ] && [ -f "${GITHUB_WORKSPACE}/Build/vcpkg/scripts/buildsystems/vcpkg.cmake" ]; then
               TOOLCHAIN_FLAG="-DCMAKE_TOOLCHAIN_FILE=${GITHUB_WORKSPACE}/Build/vcpkg/scripts/buildsystems/vcpkg.cmake"
             fi
+          fi
           ARCH_ARG=""
           if [ "${{ runner.os }}" = "Windows" ] && [ -n "${{ matrix.platform_name }}" ]; then
             ARCH_ARG="-A ${{ matrix.platform_name }}"
           fi
-          if command -v ninja >/dev/null 2>&1; then
-            MAKE_PROG_FLAG="-DCMAKE_MAKE_PROGRAM=$(command -v ninja)"
-          else
-            MAKE_PROG_FLAG=""
-          fi
+            if command -v ninja >/dev/null 2>&1; then
+              MAKE_PROG_FLAG="-DCMAKE_MAKE_PROGRAM=$(command -v ninja)"
+            else
+              MAKE_PROG_FLAG=""
+            fi
           CMAKE_PREFIX_PATH_ARG=""
           if [ -n "${QT_PREFIX_PATH}" ]; then
             CMAKE_PREFIX_PATH_ARG="-DCMAKE_PREFIX_PATH=${QT_PREFIX_PATH}"
