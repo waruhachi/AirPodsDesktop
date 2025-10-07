@@ -1,5 +1,4 @@
 name: Cross-Platform Builds
-
 on:
   push:
     paths-ignore:
@@ -14,25 +13,20 @@ on:
       - 'Assets/**'
       - 'Docs/**'
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
-
 env:
   BUILD_TYPE: RelWithDebInfo
   UPLOAD_ARTIFACT: true
   CACHE_DEPS: false
   FIXED_CMAKE_VERSION: 3.21.4
-
 jobs:
   Build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-
     strategy:
       fail-fast: false
       matrix:
@@ -49,27 +43,21 @@ jobs:
             qt_subdir: "gcc_64"
             enable_installer: false
             cmake_multi_config: false
-
     defaults:
       run:
         shell: bash
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           submodules: recursive
-
       - name: Prepare build directory
         run: mkdir -p Build
-
       - name: Generate dependencies cache key
         if: env.CACHE_DEPS == 'true'
         run: |
           curl -o Build/DepsRef.json https://api.github.com/repos/SpriteOvO/AirPodsDesktop-Deps/git/refs/heads/main
-          echo "DepsRef.json:"
           cat Build/DepsRef.json
-
       - name: Dependencies cache
         id: cache-deps
         if: env.CACHE_DEPS == 'true'
@@ -77,43 +65,32 @@ jobs:
         with:
           path: Build/AirPodsDesktop-Deps
           key: ${{ hashFiles('Build/DepsRef.json') }}
-
       - name: Clone dependencies
         if: env.CACHE_DEPS != 'true' || steps.cache-deps.outputs.cache-hit != 'true'
         working-directory: Build
         run: |
           git clone --recursive https://github.com/SpriteOvO/AirPodsDesktop-Deps.git
-          echo "Dependency layout:"
           ls -1
-
       - name: Use fixed CMake version (Windows)
         if: runner.os == 'Windows' && env.FIXED_CMAKE_VERSION != ''
         shell: cmd
         run: |
           choco install cmake.install --version %FIXED_CMAKE_VERSION% --installargs "ADD_CMAKE_TO_PATH=System" --force
           cmake --version
-
       - name: Use fixed CMake version (Linux)
         if: runner.os == 'Linux' && env.FIXED_CMAKE_VERSION != ''
         run: |
-          echo "Using system CMake (override logic could be added)."
           cmake --version
-
       - name: Install Windows tooling
         if: runner.os == 'Windows'
         shell: cmd
         run: choco install nsis -y
-
       - name: Install Linux packages
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build build-essential git curl unzip tar \
-            qtbase5-dev libgl1-mesa-dev libxkbcommon-x11-0 \
-            libpulse-dev
+          sudo apt-get install -y --no-install-recommends ninja-build build-essential git curl unzip tar qtbase5-dev libgl1-mesa-dev libxkbcommon-x11-0 libpulse-dev jq
           ninja --version
-
       - name: Clone and bootstrap vcpkg (Windows)
         if: runner.os == 'Windows'
         working-directory: Build
@@ -121,7 +98,6 @@ jobs:
         run: |
           git clone --recursive https://github.com/microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
-
       - name: Clone and bootstrap vcpkg (Linux)
         if: runner.os == 'Linux'
         working-directory: Build
@@ -130,31 +106,38 @@ jobs:
           ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
         env:
           VCPKG_FORCE_SYSTEM_BINARIES: 1
-
+      - name: Patch vcpkg manifest for Linux
+        if: runner.os == 'Linux'
+        run: |
+          if [ -f vcpkg.json ]; then
+            cp vcpkg.json vcpkg.json.bak
+            jq '(.dependencies) |= map(
+              if type=="object" and .name=="boost-stacktrace" and has("features") then
+                .features |= [ .features[] | select(. != "windbg") ]
+              elif type=="string" then
+                sub("boost-stacktrace\\[windbg\\]";"boost-stacktrace")
+              else .
+              end
+            )' vcpkg.json.bak > vcpkg.json
+            grep -n "boost-stacktrace" vcpkg.json || true
+          fi
       - name: Show vcpkg baseline + environment (Linux)
         if: runner.os == 'Linux'
         run: |
-          echo "vcpkg commit:"
           git -C Build/vcpkg rev-parse HEAD
-          echo "vcpkg.json (if present):"
           if [ -f vcpkg.json ]; then sed -n '1,120p' vcpkg.json; fi
-
       - name: Configure project
         working-directory: Build
         run: |
           set -e
           mkdir -p "$BUILD_TYPE"
           cd "$BUILD_TYPE"
-
           QT_PREFIX_CANDIDATE="${GITHUB_WORKSPACE}/Build/AirPodsDesktop-Deps/Qt/5.15.2/${{ matrix.qt_subdir }}"
           if [ "${{ runner.os }}" = "Linux" ] && [ ! -d "$QT_PREFIX_CANDIDATE" ]; then
-            echo "Linux Qt vendored path not found; relying on system qtbase5-dev."
             QT_PREFIX_PATH=""
           else
             QT_PREFIX_PATH="$QT_PREFIX_CANDIDATE"
           fi
-          echo "Qt prefix path resolved to: '${QT_PREFIX_PATH}'"
-
           if [ "${{ runner.os }}" = "Windows" ]; then
             INSTALLER_FLAG="-DAPD_GENERATE_INSTALLER=ON"
             EXTRA_FLAGS=""
@@ -162,32 +145,23 @@ jobs:
             INSTALLER_FLAG="-DAPD_GENERATE_INSTALLER=OFF"
             EXTRA_FLAGS="-DCMAKE_BUILD_TYPE=${BUILD_TYPE}"
           fi
-
           TOOLCHAIN_FLAG=""
-          if [ -d "${GITHUB_WORKSPACE}/Build/vcpkg" ] && [ -f "${GITHUB_WORKSPACE}/Build/vcpkg/scripts/buildsystems/vcpkg.cmake" ]; then
-            TOOLCHAIN_FLAG="-DCMAKE_TOOLCHAIN_FILE=${GITHUB_WORKSPACE}/Build/vcpkg/scripts/buildsystems/vcpkg.cmake"
-          fi
-
+            if [ -d "${GITHUB_WORKSPACE}/Build/vcpkg" ] && [ -f "${GITHUB_WORKSPACE}/Build/vcpkg/scripts/buildsystems/vcpkg.cmake" ]; then
+              TOOLCHAIN_FLAG="-DCMAKE_TOOLCHAIN_FILE=${GITHUB_WORKSPACE}/Build/vcpkg/scripts/buildsystems/vcpkg.cmake"
+            fi
           ARCH_ARG=""
           if [ "${{ runner.os }}" = "Windows" ] && [ -n "${{ matrix.platform_name }}" ]; then
             ARCH_ARG="-A ${{ matrix.platform_name }}"
           fi
-
           if command -v ninja >/dev/null 2>&1; then
-            NINJA_PATH=$(command -v ninja)
-            MAKE_PROG_FLAG="-DCMAKE_MAKE_PROGRAM=${NINJA_PATH}"
+            MAKE_PROG_FLAG="-DCMAKE_MAKE_PROGRAM=$(command -v ninja)"
           else
             MAKE_PROG_FLAG=""
           fi
-
           CMAKE_PREFIX_PATH_ARG=""
           if [ -n "${QT_PREFIX_PATH}" ]; then
             CMAKE_PREFIX_PATH_ARG="-DCMAKE_PREFIX_PATH=${QT_PREFIX_PATH}"
           fi
-
-          echo "Configuring with generator: ${{ matrix.generator }}"
-          echo "Using flags: ${EXTRA_FLAGS} ${INSTALLER_FLAG} ${TOOLCHAIN_FLAG} ${ARCH_ARG} ${MAKE_PROG_FLAG} ${CMAKE_PREFIX_PATH_ARG}"
-
           cmake -G "${{ matrix.generator }}" \
             ${ARCH_ARG} \
             ${EXTRA_FLAGS} \
@@ -197,57 +171,45 @@ jobs:
             ${INSTALLER_FLAG} \
             -DAPD_BUILD_GIT_HASH=${{ github.sha }} \
             ../../
-
       - name: Build project (Windows)
         if: runner.os == 'Windows'
         working-directory: Build/${{ env.BUILD_TYPE }}
         shell: cmd
-        run: |
-          cmake --build . --config %BUILD_TYPE%
-
+        run: cmake --build . --config %BUILD_TYPE%
       - name: Build project (Linux)
         if: runner.os == 'Linux'
         working-directory: Build/${{ env.BUILD_TYPE }}
-        run: |
-          cmake --build . -- -j"$(nproc)"
-
+        run: cmake --build . -- -j"$(nproc)"
       - name: List build outputs
         working-directory: Build/${{ env.BUILD_TYPE }}
         run: |
           ls -R ./Binary 2>/dev/null || echo "No Binary dir"
-          ls -R ./Installer 2>/dev/null || echo "No Installer dir (expected on Linux if installer disabled)"
-
+          ls -R ./Installer 2>/dev/null || echo "No Installer dir"
       - name: Prepare Windows artifacts
         if: runner.os == 'Windows' && env.UPLOAD_ARTIFACT == 'true' && matrix.enable_installer
-        working-directory: Build\\${{ env.BUILD_TYPE }}\\Installer
+        working-directory: Build/${{ env.BUILD_TYPE }}/Installer
         shell: cmd
         run: |
-          if exist _CPack_Packages\\win32\\NSIS (
-            cd _CPack_Packages\\win32\\NSIS
+          if exist _CPack_Packages\win32\NSIS (
+            cd _CPack_Packages\win32\NSIS
             for /d %%D in (AirPodsDesktop-*-win32) do (
               move "%%D" "AirPodsDesktop-${{ github.sha }}-win32"
             )
-          ) else (
-            echo "NSIS directory not found."
-            dir
           )
-
       - name: Upload artifact - Windows Installer
         if: runner.os == 'Windows' && env.UPLOAD_ARTIFACT == 'true' && matrix.enable_installer
         uses: actions/upload-artifact@v4
         with:
           name: AirPodsDesktop-${{ github.sha }}-Installer
-          path: Build\\${{ env.BUILD_TYPE }}\\Installer\\AirPodsDesktop-*-win32.exe
+          path: Build/${{ env.BUILD_TYPE }}/Installer/AirPodsDesktop-*-win32.exe
           retention-days: 90
-
       - name: Upload artifact - Windows Portable
         if: runner.os == 'Windows' && env.UPLOAD_ARTIFACT == 'true' && matrix.enable_installer
         uses: actions/upload-artifact@v4
         with:
           name: AirPodsDesktop-${{ github.sha }}-Portable
-          path: Build\\${{ env.BUILD_TYPE }}\\Installer\\_CPack_Packages\\win32\\NSIS\\AirPodsDesktop-${{ github.sha }}-win32\\AirPodsDesktop
+          path: Build/${{ env.BUILD_TYPE }}/Installer/_CPack_Packages/win32/NSIS/AirPodsDesktop-${{ github.sha }}-win32/AirPodsDesktop
           retention-days: 90
-
       - name: Prepare Linux artifact
         if: runner.os == 'Linux' && env.UPLOAD_ARTIFACT == 'true'
         working-directory: Build/${{ env.BUILD_TYPE }}
@@ -258,10 +220,9 @@ jobs:
             tar -czf AirPodsDesktop-${{ github.sha }}-linux.tar.gz -C package-root .
             ls -lh AirPodsDesktop-${{ github.sha }}-linux.tar.gz
           else
-            echo "Binary directory not found; adjust packaging or verify build target name."
+            echo "Binary directory not found"
             exit 1
           fi
-
       - name: Upload artifact - Linux Portable
         if: runner.os == 'Linux' && env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@v4
