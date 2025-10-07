@@ -89,7 +89,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build build-essential git curl unzip tar qtbase5-dev libgl1-mesa-dev libxkbcommon-x11-0 libpulse-dev jq
+          sudo apt-get install -y --no-install-recommends ninja-build build-essential git curl unzip tar qtbase5-dev libqt5svg5-dev libgl1-mesa-dev libxkbcommon-x11-0 libpulse-dev jq
           ninja --version
       - name: Clone and bootstrap vcpkg (Windows)
         if: runner.os == 'Windows'
@@ -102,8 +102,8 @@ jobs:
         if: runner.os == 'Linux' && env.SKIP_VCPKG_ON_LINUX != 'true'
         working-directory: Build
         run: |
-            git clone https://github.com/microsoft/vcpkg.git
-            ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          git clone https://github.com/microsoft/vcpkg.git
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
         env:
           VCPKG_FORCE_SYSTEM_BINARIES: 1
       - name: Patch vcpkg manifest for Linux
@@ -133,7 +133,6 @@ jobs:
             if grep -q 'boost-stacktrace\[windbg\]' vcpkg.json; then
               sed -i.bak 's/boost-stacktrace\[windbg\]/boost-stacktrace/g' vcpkg.json
             fi
-            echo "Final manifest snippet:"
             sed -n '1,160p' vcpkg.json
           fi
       - name: Show vcpkg baseline + environment (Linux)
@@ -172,11 +171,11 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ] && [ -n "${{ matrix.platform_name }}" ]; then
             ARCH_ARG="-A ${{ matrix.platform_name }}"
           fi
-            if command -v ninja >/dev/null 2>&1; then
-              MAKE_PROG_FLAG="-DCMAKE_MAKE_PROGRAM=$(command -v ninja)"
-            else
-              MAKE_PROG_FLAG=""
-            fi
+          if command -v ninja >/dev/null 2>&1; then
+            MAKE_PROG_FLAG="-DCMAKE_MAKE_PROGRAM=$(command -v ninja)"
+          else
+            MAKE_PROG_FLAG=""
+          fi
           CMAKE_PREFIX_PATH_ARG=""
           if [ -n "${QT_PREFIX_PATH}" ]; then
             CMAKE_PREFIX_PATH_ARG="-DCMAKE_PREFIX_PATH=${QT_PREFIX_PATH}"
@@ -219,9 +218,9 @@ jobs:
         if: runner.os == 'Windows' && env.UPLOAD_ARTIFACT == 'true' && matrix.enable_installer
         uses: actions/upload-artifact@v4
         with:
-          name: AirPodsDesktop-${{ github.sha }}-Installer
-          path: Build/${{ env.BUILD_TYPE }}/Installer/AirPodsDesktop-*-win32.exe
-          retention-days: 90
+            name: AirPodsDesktop-${{ github.sha }}-Installer
+            path: Build/${{ env.BUILD_TYPE }}/Installer/AirPodsDesktop-*-win32.exe
+            retention-days: 90
       - name: Upload artifact - Windows Portable
         if: runner.os == 'Windows' && env.UPLOAD_ARTIFACT == 'true' && matrix.enable_installer
         uses: actions/upload-artifact@v4
@@ -239,7 +238,7 @@ jobs:
             tar -czf AirPodsDesktop-${{ github.sha }}-linux.tar.gz -C package-root .
             ls -lh AirPodsDesktop-${{ github.sha }}-linux.tar.gz
           else
-            echo "Binary directory not found"
+            echo "No Binary dir"
             exit 1
           fi
       - name: Upload artifact - Linux Portable
