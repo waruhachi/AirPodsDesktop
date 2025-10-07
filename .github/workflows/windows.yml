@@ -91,7 +91,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ninja-build build-essential git curl unzip tar jq \
-            qtbase5-dev libqt5svg5-dev qtmultimedia5-dev \
+            qtbase5-dev libqt5svg5-dev qtmultimedia5-dev qttools5-dev \
             libgl1-mesa-dev libxkbcommon-x11-0 libpulse-dev
           ninja --version
       - name: Clone and bootstrap vcpkg (Windows)
