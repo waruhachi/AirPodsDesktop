@@ -7,14 +7,12 @@ on:
       - 'LICENSE'
       - 'Assets/**'
       - 'Docs/**'
-
   pull_request:
     paths-ignore:
       - '**.md'
       - 'LICENSE'
       - 'Assets/**'
       - 'Docs/**'
-
   workflow_dispatch:
 
 permissions:
@@ -104,8 +102,7 @@ jobs:
       - name: Install Windows tooling
         if: runner.os == 'Windows'
         shell: cmd
-        run: |
-          choco install nsis -y
+        run: choco install nsis -y
 
       - name: Install Linux packages
         if: runner.os == 'Linux'
@@ -115,7 +112,7 @@ jobs:
             ninja-build build-essential git curl unzip tar \
             qtbase5-dev libgl1-mesa-dev libxkbcommon-x11-0 \
             libpulse-dev
-          ninja --version || true
+          ninja --version
 
       - name: Clone and bootstrap vcpkg (Windows)
         if: runner.os == 'Windows'
@@ -125,22 +122,38 @@ jobs:
           git clone --recursive https://github.com/microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
 
-      - name: Clone and bootstrap vcpkg (Linux - optional)
+      - name: Clone and bootstrap vcpkg (Linux)
         if: runner.os == 'Linux'
         working-directory: Build
         run: |
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git
+          git clone https://github.com/microsoft/vcpkg.git
           ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-        continue-on-error: true
+        env:
+          VCPKG_FORCE_SYSTEM_BINARIES: 1
+
+      - name: Show vcpkg baseline + environment (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "vcpkg commit:"
+          git -C Build/vcpkg rev-parse HEAD
+          echo "vcpkg.json (if present):"
+          if [ -f vcpkg.json ]; then sed -n '1,120p' vcpkg.json; fi
 
       - name: Configure project
         working-directory: Build
         run: |
+          set -e
           mkdir -p "$BUILD_TYPE"
           cd "$BUILD_TYPE"
 
-          QT_PREFIX_PATH="${GITHUB_WORKSPACE}/Build/AirPodsDesktop-Deps/Qt/5.15.2/${{ matrix.qt_subdir }}"
-          echo "Using Qt prefix path: $QT_PREFIX_PATH"
+          QT_PREFIX_CANDIDATE="${GITHUB_WORKSPACE}/Build/AirPodsDesktop-Deps/Qt/5.15.2/${{ matrix.qt_subdir }}"
+          if [ "${{ runner.os }}" = "Linux" ] && [ ! -d "$QT_PREFIX_CANDIDATE" ]; then
+            echo "Linux Qt vendored path not found; relying on system qtbase5-dev."
+            QT_PREFIX_PATH=""
+          else
+            QT_PREFIX_PATH="$QT_PREFIX_CANDIDATE"
+          fi
+          echo "Qt prefix path resolved to: '${QT_PREFIX_PATH}'"
 
           if [ "${{ runner.os }}" = "Windows" ]; then
             INSTALLER_FLAG="-DAPD_GENERATE_INSTALLER=ON"
@@ -160,13 +173,27 @@ jobs:
             ARCH_ARG="-A ${{ matrix.platform_name }}"
           fi
 
+          if command -v ninja >/dev/null 2>&1; then
+            NINJA_PATH=$(command -v ninja)
+            MAKE_PROG_FLAG="-DCMAKE_MAKE_PROGRAM=${NINJA_PATH}"
+          else
+            MAKE_PROG_FLAG=""
+          fi
+
+          CMAKE_PREFIX_PATH_ARG=""
+          if [ -n "${QT_PREFIX_PATH}" ]; then
+            CMAKE_PREFIX_PATH_ARG="-DCMAKE_PREFIX_PATH=${QT_PREFIX_PATH}"
+          fi
+
           echo "Configuring with generator: ${{ matrix.generator }}"
+          echo "Using flags: ${EXTRA_FLAGS} ${INSTALLER_FLAG} ${TOOLCHAIN_FLAG} ${ARCH_ARG} ${MAKE_PROG_FLAG} ${CMAKE_PREFIX_PATH_ARG}"
 
           cmake -G "${{ matrix.generator }}" \
             ${ARCH_ARG} \
             ${EXTRA_FLAGS} \
             ${TOOLCHAIN_FLAG} \
-            -DCMAKE_PREFIX_PATH="${QT_PREFIX_PATH}" \
+            ${MAKE_PROG_FLAG} \
+            ${CMAKE_PREFIX_PATH_ARG} \
             ${INSTALLER_FLAG} \
             -DAPD_BUILD_GIT_HASH=${{ github.sha }} \
             ../../
@@ -187,12 +214,8 @@ jobs:
       - name: List build outputs
         working-directory: Build/${{ env.BUILD_TYPE }}
         run: |
-          echo "Binary directory (if exists):"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            echo "(Listing via bash; if empty, verify paths)"
-          fi
           ls -R ./Binary 2>/dev/null || echo "No Binary dir"
-          ls -R ./Installer 2>/dev/null || echo "No Installer dir (expected on Linux)"
+          ls -R ./Installer 2>/dev/null || echo "No Installer dir (expected on Linux if installer disabled)"
 
       - name: Prepare Windows artifacts
         if: runner.os == 'Windows' && env.UPLOAD_ARTIFACT == 'true' && matrix.enable_installer
@@ -235,7 +258,7 @@ jobs:
             tar -czf AirPodsDesktop-${{ github.sha }}-linux.tar.gz -C package-root .
             ls -lh AirPodsDesktop-${{ github.sha }}-linux.tar.gz
           else
-            echo "Binary directory not found; adjust packaging step as needed."
+            echo "Binary directory not found; adjust packaging or verify build target name."
             exit 1
           fi
 
