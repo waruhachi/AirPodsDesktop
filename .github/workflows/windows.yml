@@ -26,7 +26,7 @@ env:
 
 jobs:
   Build:
-    runs-on: windows-2019
+    runs-on: windows-latest
 
     defaults:
       run:
@@ -34,7 +34,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -50,7 +50,7 @@ jobs:
       - name: Dependencies cache
         id: cache-deps
         if: env.CACHE_DEPS == 'true'
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: Build/AirPodsDesktop-Deps
           key: ${{ hashFiles('Build/DepsRef.json') }}
@@ -105,7 +105,7 @@ jobs:
           move AirPodsDesktop-*-win32 AirPodsDesktop-${{ github.sha }}-win32
 
       - name: Upload artifact - Installer
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
           name: AirPodsDesktop-${{ github.sha }}-Installer
@@ -113,7 +113,7 @@ jobs:
           retention-days: 90
 
       - name: Upload artifact - Portable
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
           name: AirPodsDesktop-${{ github.sha }}-Portable
